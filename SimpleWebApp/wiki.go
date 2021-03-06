@@ -13,8 +13,10 @@ has a title and a body (the page content).
 package main
 
 import (
-	"fmt"
+	"html/template"
 	"io/ioutil"
+	"log"
+	"net/http"
 )
 
 // Data Structure
@@ -62,10 +64,91 @@ func loadPage(title string) (*Page, error) {
 	return &Page{Title: title, Body: body}, nil
 }
 
-func main() {
-	p1 := &Page{Title: "TestPage", Body: []byte("This is a simple Page.")}
-	p1.save()
+// Create a global variable named templates, and initialize it with ParseFiles.
+// The function template.Must is a convenience wrapper that panics when passed a non nil-error value, and otherwise returns the
+// *Template unaltered. A panic is appropiate here: if the templates can't be loaded the only sensible thing to do is exit.
+var templates = template.Must(template.ParseFiles("edit.html", "view.html"))
 
-	p2, _ := loadPage("TestPage")
-	fmt.Println(string(p2.Body))
+// We've used almost exactly the same templating code in both handlers. Let's remove this duplication by moving the templating code
+// to its own function.
+
+// The http.Error function sends a specified HTTP response code and error message.
+func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
+	err := templates.ExecuteTemplate(w, tmpl+".html", p)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// Handler viewHandler.
+// 		Will allow users to view a wiki page. It will handle URLS prefixed with "/view/".
+// 		Note the use of _ to ignore the error return value from loadPage. This is done here for simplicity and generally considered
+// 		bad practice.
+
+// 		First, this function extracts the page title from r.URL.Path, the path component of the request URL. The path is re-sliced with
+// 		[len("/view/"):] to drop the leading "/view/" component of the request path. This is because the path will invariably begin with
+// 		"/view/", which is not part of the page's title.
+
+// 		The function the loads the page data, formats the page with a string of simple HTML, and writes it to w, the http.ResponseWriter
+//		example: http://localhost:8080/view/test 	->		loadPage(text)
+
+// 		Handling non-existing pages
+// 		If the requested page doesn't exist, it should redirect the client to the editPage so the content may be created
+
+func viewHandler(w http.ResponseWriter, r *http.Request) {
+	title := r.URL.Path[len("/view/"):]
+	p, err := loadPage(title)
+	if err != nil {
+		http.Redirect(w, r, "/edit/"+title, http.StatusNotFound)
+		return
+	}
+	renderTemplate(w, "view", p)
+}
+
+// Handler editHandler.
+// 		Display and edit page form.
+// 		The html/template package is part of the Go standard library. We can use html/tmplate to keep the HTML in a separated file,
+// 		allowing us to change the layout of our edit page without modifying the underlying Go code.
+
+// 		The function template.ParseFiles will read the content of edit.html and return a *template.Template
+// 		The method t.Execute executes the template, writing the generated HTML to the http.ResponseWrite. The .Title and .Body dotted
+// 		identifiers refer to p.Title and p.Body
+func editHandler(w http.ResponseWriter, r *http.Request) {
+	title := r.URL.Path[len("/edit/"):]
+	p, err := loadPage(title)
+	if err != nil {
+		p = &Page{Title: title}
+	}
+	renderTemplate(w, "edit", p)
+}
+
+// Handler saveHandler.
+// 		Save the data entered via the form.
+// 		Will handle the submission of forms located on the edit pages. After uncommenting the related in main.
+
+// 		The page title (provided in the URL) and the form's only field, Body are stored in a new page. The save() method is
+// 		the called to write the data to a file, and the client is redirected to the /view/ page.
+
+// 		The value returned by FormValue is of type string. We must convert that value to []byte before it will fit into the
+// 		Page struct. We use []byte(body) to perform the conversion.
+
+//		Any errors that occur during p.save() will be reported to the user.
+func saveHandler(w http.ResponseWriter, r *http.Request) {
+	title := r.URL.Path[len("/save/"):]
+	body := r.FormValue("body")
+	p := &Page{Title: title, Body: []byte(body)}
+
+	err := p.save()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/view/"+title, http.StatusFound)
+}
+
+func main() {
+	http.HandleFunc("/view/", viewHandler)
+	http.HandleFunc("/edit/", editHandler)
+	http.HandleFunc("/save/", saveHandler)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
