@@ -13,11 +13,34 @@ has a title and a body (the page content).
 package main
 
 import (
+	"errors"
 	"html/template"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"regexp"
 )
+
+// Validation
+// 		Security Flaw: A user can supply an arbitrary path to be read/written on the server. To mitigate this, we can write a function
+// 		to validate the title with regular expression.
+
+// 		The function regexp.MustCompile will parse and compile the regular expression, and return a regexp.Regexp.MustCompile is
+// 		distinct from Compile in that it will panic if the expression compilation fails, when Compile returns an error as a second
+// 		parameter.
+var validPath = regexp.MustCompile("^/(edit|save|view)/([a-zA-Z0-9]+)$")
+
+// 		Function that uses validPath expression to validate path and extract the page title
+// 		If the title is valid, it will be returned along with a nil error value. It the title is invalid, the function will write a "404"
+// 		"Not found error" and return an error to the handler.
+func getTitle(w http.ResponseWriter, r *http.Request) (string, error) {
+	m := validPath.FindStringSubmatch(r.URL.Path)
+	if m == nil {
+		http.NotFound(w, r)
+		return "", errors.New("Invalid Page Title")
+	}
+	return m[2], nil //The title is the second subexpression
+}
 
 // Data Structure
 // 		The type []byte means "a byte slice". The body element is a []byte rather than string because that
@@ -64,15 +87,15 @@ func loadPage(title string) (*Page, error) {
 	return &Page{Title: title, Body: body}, nil
 }
 
-// Create a global variable named templates, and initialize it with ParseFiles.
-// The function template.Must is a convenience wrapper that panics when passed a non nil-error value, and otherwise returns the
-// *Template unaltered. A panic is appropiate here: if the templates can't be loaded the only sensible thing to do is exit.
+//		Create a global variable named templates, and initialize it with ParseFiles.
+//		The function template.Must is a convenience wrapper that panics when passed a non nil-error value, and otherwise returns the
+//		*Template unaltered. A panic is appropiate here: if the templates can't be loaded the only sensible thing to do is exit.
 var templates = template.Must(template.ParseFiles("edit.html", "view.html"))
 
-// We've used almost exactly the same templating code in both handlers. Let's remove this duplication by moving the templating code
-// to its own function.
+// 		We've used almost exactly the same templating code in both handlers. Let's remove this duplication by moving the templating code
+// 		to its own function.
 
-// The http.Error function sends a specified HTTP response code and error message.
+// 		The http.Error function sends a specified HTTP response code and error message.
 func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
 	err := templates.ExecuteTemplate(w, tmpl+".html", p)
 	if err != nil {
@@ -96,7 +119,10 @@ func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
 // 		If the requested page doesn't exist, it should redirect the client to the editPage so the content may be created
 
 func viewHandler(w http.ResponseWriter, r *http.Request) {
-	title := r.URL.Path[len("/view/"):]
+	title, err := getTitle(w, r)
+	if err != nil {
+		return
+	}
 	p, err := loadPage(title)
 	if err != nil {
 		http.Redirect(w, r, "/edit/"+title, http.StatusNotFound)
@@ -114,7 +140,10 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 // 		The method t.Execute executes the template, writing the generated HTML to the http.ResponseWrite. The .Title and .Body dotted
 // 		identifiers refer to p.Title and p.Body
 func editHandler(w http.ResponseWriter, r *http.Request) {
-	title := r.URL.Path[len("/edit/"):]
+	title, err := getTitle(w, r)
+	if err != nil {
+		return
+	}
 	p, err := loadPage(title)
 	if err != nil {
 		p = &Page{Title: title}
@@ -134,11 +163,14 @@ func editHandler(w http.ResponseWriter, r *http.Request) {
 
 //		Any errors that occur during p.save() will be reported to the user.
 func saveHandler(w http.ResponseWriter, r *http.Request) {
-	title := r.URL.Path[len("/save/"):]
+	title, err := getTitle(w, r)
+	if err != nil {
+		return
+	}
 	body := r.FormValue("body")
 	p := &Page{Title: title, Body: []byte(body)}
 
-	err := p.save()
+	err = p.save()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
