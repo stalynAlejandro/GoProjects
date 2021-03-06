@@ -118,14 +118,11 @@ func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
 // 		Handling non-existing pages
 // 		If the requested page doesn't exist, it should redirect the client to the editPage so the content may be created
 
-func viewHandler(w http.ResponseWriter, r *http.Request) {
-	title, err := getTitle(w, r)
-	if err != nil {
-		return
-	}
+func viewHandler(w http.ResponseWriter, r *http.Request, title string) {
 	p, err := loadPage(title)
+
 	if err != nil {
-		http.Redirect(w, r, "/edit/"+title, http.StatusNotFound)
+		http.Redirect(w, r, "/edit/"+title, http.StatusFound)
 		return
 	}
 	renderTemplate(w, "view", p)
@@ -139,12 +136,9 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 // 		The function template.ParseFiles will read the content of edit.html and return a *template.Template
 // 		The method t.Execute executes the template, writing the generated HTML to the http.ResponseWrite. The .Title and .Body dotted
 // 		identifiers refer to p.Title and p.Body
-func editHandler(w http.ResponseWriter, r *http.Request) {
-	title, err := getTitle(w, r)
-	if err != nil {
-		return
-	}
+func editHandler(w http.ResponseWriter, r *http.Request, title string) {
 	p, err := loadPage(title)
+
 	if err != nil {
 		p = &Page{Title: title}
 	}
@@ -162,15 +156,11 @@ func editHandler(w http.ResponseWriter, r *http.Request) {
 // 		Page struct. We use []byte(body) to perform the conversion.
 
 //		Any errors that occur during p.save() will be reported to the user.
-func saveHandler(w http.ResponseWriter, r *http.Request) {
-	title, err := getTitle(w, r)
-	if err != nil {
-		return
-	}
+func saveHandler(w http.ResponseWriter, r *http.Request, title string) {
 	body := r.FormValue("body")
 	p := &Page{Title: title, Body: []byte(body)}
+	err := p.save()
 
-	err = p.save()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -178,9 +168,34 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/view/"+title, http.StatusFound)
 }
 
+//	Introducing Function Literals and Closures
+//	Catching the error condition in each handler introduces a lot of repeated code. What if we could wrap each of the handlers in
+//	function that does this validation and erro checking.
+//
+//	Go's functional provide a powerful means of abstracting functionality that can help us here.
+
+//	The returned function is called a closure because it encolses values defined outside of it. In this case, the variable
+//	fn(the single argument to makeHandler) is enclosed by the closure. The variable fn will be one of our save, edit, or view handlers.
+
+// The clousure returned by makeHandler is a function that takes an http.ResponseWriter and http.Request.
+// The clousure extracts the title from the request path, and validates it with the validPath regexp. If the title is invalid, an
+// error will be written to the ResponseWriter, Request and title as arguments.
+func makeHandler(fn func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Here we will extract the page title from the Request,
+		// and call the provider handler 'fn
+		m := validPath.FindStringSubmatch(r.URL.Path)
+		if m == nil {
+			http.NotFound(w, r)
+			return
+		}
+		fn(w, r, m[2])
+	}
+}
+
 func main() {
-	http.HandleFunc("/view/", viewHandler)
-	http.HandleFunc("/edit/", editHandler)
-	http.HandleFunc("/save/", saveHandler)
+	http.HandleFunc("/view/", makeHandler(viewHandler))
+	http.HandleFunc("/edit/", makeHandler(editHandler))
+	http.HandleFunc("/save/", makeHandler(saveHandler))
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
